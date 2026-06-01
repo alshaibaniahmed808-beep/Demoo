@@ -19,7 +19,6 @@ export const LivePatientTracker: React.FC<LivePatientTrackerProps> = ({
   const [patientData, setPatientData] = useState<QueueItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [patientsAhead, setPatientsAhead] = useState(0);
-  const [realtimeSubscription, setRealtimeSubscription] = useState<any>(null);
 
   const debouncedSearch = useMemo(
     () =>
@@ -76,8 +75,6 @@ export const LivePatientTracker: React.FC<LivePatientTrackerProps> = ({
       }
     );
 
-    setRealtimeSubscription(subscription);
-
     return () => {
       subscription.unsubscribe();
     };
@@ -90,15 +87,15 @@ export const LivePatientTracker: React.FC<LivePatientTrackerProps> = ({
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'waiting':
-        return 'bg-blue-100 text-blue-800';
+        return 'bg-gradient-to-br from-primary-50 to-primary-100';
       case 'calling':
-        return 'bg-yellow-100 text-yellow-800 animate-pulse';
+        return 'bg-gradient-to-br from-accent-50 to-accent-100';
       case 'active':
-        return 'bg-purple-100 text-purple-800';
+        return 'bg-gradient-to-br from-purple-50 to-purple-100';
       case 'done':
-        return 'bg-green-100 text-green-800';
+        return 'bg-gradient-to-br from-green-50 to-green-100';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-neutral-50';
     }
   };
 
@@ -118,94 +115,123 @@ export const LivePatientTracker: React.FC<LivePatientTrackerProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 rtl" dir="rtl">
+    <div className="min-h-screen bg-gradient-novro rtl p-6 md:p-8" dir="rtl">
       <div className="max-w-md mx-auto">
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">تتبع دورك</h1>
-          <p className="text-gray-600">ابحث عن رقم دورك أو اسمك</p>
+        {/* Header */}
+        <div className="mb-10 text-center text-white">
+          <h1 className="text-4xl font-display font-bold mb-2">تتبع دورك</h1>
+          <p className="text-primary-100 text-lg">ابحث عن رقم دورك أو اسمك</p>
         </div>
 
-        <div className="mb-6">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={handleSearchChange}
-            placeholder="ابحث برقم دورك أو اسمك..."
-            className="w-full px-4 py-4 text-lg border-2 border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 shadow-sm"
-          />
-          {loading && <div className="text-center mt-2 text-blue-600">جاري البحث...</div>}
+        {/* Search Input */}
+        <div className="mb-8">
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={handleSearchChange}
+              placeholder="ابحث برقم دورك أو اسمك..."
+              className="w-full px-6 py-4 text-lg border-0 rounded-2xl shadow-lg focus:outline-none focus:ring-4 focus:ring-accent-300 transition text-right font-medium placeholder:text-neutral-400"
+            />
+            <div className="absolute left-4 top-1/2 transform -translate-y-1/2 text-xl">🔍</div>
+          </div>
+          {loading && (
+            <p className="text-center mt-3 text-primary-100 font-medium flex items-center justify-center gap-2">
+              <div className="inline-block animate-spin h-4 w-4 border-2 border-primary-100 border-t-white rounded-full"></div>
+              جاري البحث...
+            </p>
+          )}
         </div>
 
+        {/* Patient Card */}
         {patientData && (
-          <div
-            className={`${getStatusColor(patientData.status)} rounded-lg p-6 shadow-lg mb-6 transform transition`}
-          >
-            <div className="text-center mb-6">
-              <div className="inline-block bg-white rounded-full p-4 shadow-md">
-                <p className="text-sm text-gray-600 mb-1">رقم دورك</p>
-                <p className="text-5xl font-bold text-blue-600">
+          <div className={`${getStatusColor(patientData.status)} rounded-3xl p-8 shadow-2xl mb-6 transform transition duration-300 animate-slide-up border-2 border-white/20`}>
+            {/* Ticket Number - Large Display */}
+            <div className="text-center mb-8">
+              <div className="inline-block bg-white rounded-3xl p-6 shadow-lg">
+                <p className="text-xs font-semibold text-neutral-600 mb-2 uppercase tracking-wider">رقم دورك</p>
+                <p className="text-6xl font-display font-bold bg-gradient-to-r from-primary-600 to-accent-500 bg-clip-text text-transparent">
                   {String(patientData.ticket_number).padStart(3, '0')}
                 </p>
               </div>
             </div>
 
-            <div className="space-y-4">
+            {/* Patient Info */}
+            <div className="space-y-5 mb-8">
+              {/* Name */}
               <div>
-                <p className="text-xs opacity-75 mb-1">اسم المريض</p>
-                <p className="text-lg font-semibold">{patientData.patient_name}</p>
+                <p className="text-xs font-semibold opacity-75 mb-1 uppercase tracking-wide">اسم المريض</p>
+                <p className="text-2xl font-bold text-neutral-900">{patientData.patient_name}</p>
               </div>
 
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <p className="text-xs opacity-75 mb-1">الحالة</p>
-                  <p className="text-lg font-semibold">{getStatusLabel(patientData.status)}</p>
+              {/* Status */}
+              <div>
+                <p className="text-xs font-semibold opacity-75 mb-2 uppercase tracking-wide">الحالة</p>
+                <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 rounded-full font-semibold">
+                  <span className="text-lg">
+                    {patientData.status === 'waiting'
+                      ? '⏳'
+                      : patientData.status === 'calling'
+                      ? '📢'
+                      : patientData.status === 'active'
+                      ? '👨‍⚕️'
+                      : '✅'}
+                  </span>
+                  <span className="text-neutral-900">{getStatusLabel(patientData.status)}</span>
                 </div>
               </div>
-
-              {patientData.status === 'waiting' && (
-                <div className="bg-white bg-opacity-20 rounded-lg p-4 text-center">
-                  <p className="text-sm opacity-75 mb-1">المرضى أمامك</p>
-                  <p className="text-3xl font-bold">{patientsAhead}</p>
-                  <p className="text-xs opacity-75 mt-2">
-                    الوقت المتوقع: ~{patientsAhead * 15} دقيقة
-                  </p>
-                </div>
-              )}
-
-              {patientData.status === 'calling' && (
-                <div className="animate-bounce bg-red-500 text-white rounded-lg p-4 text-center font-bold text-lg">
-                  🔴 يرجى التوجه إلى عيادة الطبيب الآن!
-                </div>
-              )}
-
-              {patientData.status === 'active' && (
-                <div className="bg-white bg-opacity-20 rounded-lg p-4 text-center">
-                  <p className="font-semibold">الطبيب جاهز لك الآن 👋</p>
-                </div>
-              )}
-
-              {patientData.status === 'done' && (
-                <div className="bg-white bg-opacity-20 rounded-lg p-4 text-center">
-                  <p className="text-lg font-semibold">✅ شكراً لك!</p>
-                  <p className="text-sm opacity-75 mt-2">تم إنهاء الاستشارة</p>
-                </div>
-              )}
             </div>
+
+            {/* Status-Specific Content */}
+            {patientData.status === 'waiting' && (
+              <div className="bg-white/80 rounded-2xl p-6 text-center">
+                <p className="text-xs font-semibold text-neutral-600 mb-2 uppercase tracking-wide">المرضى أمامك</p>
+                <p className="text-5xl font-display font-bold text-primary-600 mb-3">{patientsAhead}</p>
+                <p className="text-sm font-medium text-neutral-700">
+                  الوقت المتوقع: <span className="font-bold text-primary-600">~{patientsAhead * 15} دقيقة</span>
+                </p>
+              </div>
+            )}
+
+            {patientData.status === 'calling' && (
+              <div className="bg-white/90 rounded-2xl p-6 text-center animate-pulse">
+                <p className="text-4xl mb-3">🔔</p>
+                <p className="text-2xl font-bold text-accent-600">يرجى التوجه إلى عيادة الطبيب الآن!</p>
+              </div>
+            )}
+
+            {patientData.status === 'active' && (
+              <div className="bg-white/80 rounded-2xl p-6 text-center">
+                <p className="text-4xl mb-3">👋</p>
+                <p className="text-xl font-bold text-neutral-900">الطبيب جاهز لك الآن</p>
+              </div>
+            )}
+
+            {patientData.status === 'done' && (
+              <div className="bg-white/80 rounded-2xl p-6 text-center">
+                <p className="text-5xl mb-3">✅</p>
+                <p className="text-xl font-bold text-green-600">شكراً لك!</p>
+                <p className="text-sm text-neutral-600 mt-2">تم إنهاء الاستشارة بنجاح</p>
+              </div>
+            )}
           </div>
         )}
 
+        {/* No Results */}
         {searchQuery && !patientData && !loading && (
-          <div className="bg-white rounded-lg p-6 text-center shadow">
-            <p className="text-gray-600">لم يتم العثور على نتيجة</p>
-            <p className="text-sm text-gray-500 mt-2">تحقق من البيانات المدخلة</p>
+          <div className="bg-white rounded-2xl p-8 text-center shadow-lg animate-slide-up">
+            <p className="text-3xl mb-3">🔍</p>
+            <p className="text-lg font-semibold text-neutral-700 mb-1">لم يتم العثور على نتيجة</p>
+            <p className="text-sm text-neutral-500">تحقق من رقم دورك أو اسمك</p>
           </div>
         )}
 
+        {/* Empty State */}
         {!searchQuery && !patientData && (
-          <div className="bg-white rounded-lg p-6 text-center shadow">
-            <p className="text-2xl mb-3">🔍</p>
-            <p className="text-gray-600 font-medium">ابدأ البحث الآن</p>
-            <p className="text-sm text-gray-500 mt-2">ادخل اسمك أو رقم دورك</p>
+          <div className="bg-white rounded-2xl p-8 text-center shadow-lg">
+            <p className="text-5xl mb-4">🔎</p>
+            <p className="text-lg font-semibold text-neutral-700 mb-2">ابدأ البحث الآن</p>
+            <p className="text-sm text-neutral-500">أدخل رقم دورك أو اسمك بالأعلى</p>
           </div>
         )}
       </div>
