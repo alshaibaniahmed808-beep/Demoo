@@ -1,94 +1,101 @@
-// ============================================
-// Realtime Service - WebSocket Streaming
-// ============================================
-
 import { supabase } from '@/lib/supabase';
-import { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import { RealtimePostgresChangesPayload, RealtimeChannel } from '@supabase/supabase-js';
 
-export type RealtimeCallback = (payload: any) => void;
+export type RealtimeCallback = (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void;
 
-interface RealtimeSubscription {
-  channel: any;
+export interface RealtimeSubscription {
   unsubscribe: () => void;
 }
 
+const RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_ATTEMPTS = 10;
+
+function buildQueueChannel(
+  clinicId: string,
+  doctorId: string,
+  onUpdate: RealtimeCallback,
+  onError?: (err: Error) => void
+): RealtimeChannel {
+  const channelName = `queue:${clinicId}:${doctorId}`;
+
+  return supabase
+    .channel(channelName)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'queue_items',
+        // Filter at DB level to only receive rows for this doctor — minimises server load
+        filter: `doctor_id=eq.${doctorId}`,
+      },
+      (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
+        const row = (payload.new ?? payload.old) as Record<string, unknown>;
+        // Guard: only process rows belonging to the correct clinic
+        if (row?.clinic_id === clinicId) {
+          onUpdate(payload);
+        }
+      }
+    );
+}
+
 export const realtimeService = {
+  /**
+   * Subscribe to all queue_items changes for a specific doctor.
+   * The filter is applied at the Postgres replication level (doctor_id=eq.X)
+   * so only relevant row-change events are transmitted to this client,
+   * reducing bandwidth and server fanout.
+   *
+   * Auto-reconnect: backs off exponentially up to MAX_RECONNECT_ATTEMPTS
+   * before giving up, calling onError on permanent failure.
+   */
   subscribeToQueueUpdates(
     clinicId: string,
     doctorId: string,
     onUpdate: RealtimeCallback,
-    onError?: (error: Error) => void
+    onError?: (err: Error) => void
   ): RealtimeSubscription {
-    const channelName = `queue_updates_${clinicId}_${doctorId}`;
+    let channel: RealtimeChannel;
+    let attempts = 0;
+    let destroyed = false;
 
-    const channel = supabase
-      .channel(channelName, {
-        config: {
-          broadcast: { self: true },
-        },
-      })
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'queue_items',
-          filter: `clinic_id=eq.${clinicId}`,
-        },
-        (payload: RealtimePostgresChangesPayload<any>) => {
-          if (payload.new?.doctor_id === doctorId || payload.old?.doctor_id === doctorId) {
-            onUpdate(payload);
-          }
+    function subscribe() {
+      channel = buildQueueChannel(clinicId, doctorId, onUpdate, onError);
+
+      channel.subscribe((status, err) => {
+        if (destroyed) return;
+
+        if (status === 'SUBSCRIBED') {
+          attempts = 0;
+          return;
         }
-      )
-      .on('error', (error: any) => {
-        console.error('Realtime subscription error:', error);
-        if (onError) onError(new Error(error.message));
-      })
-      .subscribe(
-        (status: string) => {
-          console.log(`Realtime subscription status: ${status}`);
-          if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
-            console.warn('Attempting to reconnect...');
-            setTimeout(() => {
-              channel.subscribe();
-            }, 3000);
+
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          if (err) console.error('[Realtime] channel error:', err);
+
+          attempts += 1;
+          if (attempts > MAX_RECONNECT_ATTEMPTS) {
+            onError?.(new Error(`Realtime: max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`));
+            return;
           }
+
+          const delay = RECONNECT_DELAY_MS * Math.min(attempts, 8);
+          console.warn(`[Realtime] reconnecting in ${delay}ms (attempt ${attempts})`);
+          setTimeout(() => {
+            if (!destroyed) {
+              supabase.removeChannel(channel);
+              subscribe();
+            }
+          }, delay);
         }
-      );
+      });
+    }
+
+    subscribe();
 
     return {
-      channel,
-      unsubscribe: () => {
-        supabase.removeChannel(channel);
-      },
-    };
-  },
-
-  subscribeToCallNotifications(
-    clinicId: string,
-    doctorId: string,
-    onCall: RealtimeCallback
-  ): RealtimeSubscription {
-    const channelName = `patient_calls_${clinicId}_${doctorId}`;
-
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'queue_items',
-          filter: `and(clinic_id=eq.${clinicId},doctor_id=eq.${doctorId},status=eq.calling)`,
-        },
-        onCall
-      )
-      .subscribe();
-
-    return {
-      channel,
-      unsubscribe: () => {
+      unsubscribe() {
+        destroyed = true;
         supabase.removeChannel(channel);
       },
     };
@@ -98,10 +105,8 @@ export const realtimeService = {
     sessionId: string,
     onUpdate: RealtimeCallback
   ): RealtimeSubscription {
-    const channelName = `session_${sessionId}`;
-
     const channel = supabase
-      .channel(channelName)
+      .channel(`session:${sessionId}`)
       .on(
         'postgres_changes',
         {
@@ -115,18 +120,7 @@ export const realtimeService = {
       .subscribe();
 
     return {
-      channel,
-      unsubscribe: () => {
-        supabase.removeChannel(channel);
-      },
+      unsubscribe: () => supabase.removeChannel(channel),
     };
-  },
-
-  async broadcastEvent(channel: string, event: string, data: any) {
-    return supabase.channel(channel).send({
-      type: 'broadcast',
-      event,
-      payload: data,
-    });
   },
 };

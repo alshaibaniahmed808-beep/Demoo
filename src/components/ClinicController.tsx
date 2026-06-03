@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { Doctor } from '@/types';
 import { TVMode } from '@/components/TVMode';
 import { ReceptionistControlPanel } from '@/components/ReceptionistControlPanel';
 
@@ -8,7 +9,7 @@ interface ClinicLayoutProps {
   children?: React.ReactNode;
   clinicId: string;
   doctorId: string;
-  doctor: any;
+  doctor: Doctor;
 }
 
 export const ClinicController: React.FC<ClinicLayoutProps> = ({

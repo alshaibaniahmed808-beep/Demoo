@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  CSS custom properties are injected per-clinic by the Dynamic Branding Engine
+  (see DynamicBrandingProvider). These are the safe fallback defaults.
+*/
+:root {
+  --clinic-primary:   #03A9F4;
+  --clinic-secondary: #1F2937;
+  --clinic-accent:    #1DD1A1;
+  --clinic-text:      #FFFFFF;
+}
+
+/*
+  Utility classes that read from the per-clinic CSS variables.
+  Tailwind JIT cannot know the runtime values, so we define these manually.
+  They override any static Tailwind class of the same name when used in
+  clinic-scoped layouts.
+*/
+.bg-clinic-primary   { background-color: var(--clinic-primary); }
+.bg-clinic-secondary { background-color: var(--clinic-secondary); }
+.bg-clinic-accent    { background-color: var(--clinic-accent); }
+.text-clinic-primary { color: var(--clinic-primary); }
+.text-clinic-accent  { color: var(--clinic-accent); }
+.border-clinic-primary { border-color: var(--clinic-primary); }
+.ring-clinic-primary   { --tw-ring-color: var(--clinic-primary); }
+
+@layer utilities {
+  .animation-scale-in {
+    animation: scale-in 0.25s ease-out both;
+  }
+  .animation-slide-up {
+    animation: slide-up 0.3s ease-out both;
+  }
+}

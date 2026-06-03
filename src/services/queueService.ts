@@ -1,7 +1,3 @@
-// ============================================
-// Queue Service
-// ============================================
-
 import { supabase } from '@/lib/supabase';
 import { QueueItem, QueueStatus } from '@/types';
 
@@ -23,11 +19,11 @@ export const queueService = {
           clinic_id: clinicId,
           doctor_id: doctorId,
           patient_name: patientName,
-          patient_phone: patientPhone,
-          patient_id_number: patientIdNumber,
+          patient_phone: patientPhone ?? null,
+          patient_id_number: patientIdNumber ?? null,
           ticket_number: ticketNumber,
           status: 'waiting',
-          notes: notes,
+          notes: notes ?? null,
         })
         .select()
         .single();
@@ -48,8 +44,8 @@ export const queueService = {
       .select('ticket_number')
       .eq('doctor_id', doctorId)
       .eq('clinic_id', clinicId)
-      .gte('created_at', `${today}T00:00:00`)
-      .lte('created_at', `${today}T23:59:59`)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .lte('created_at', `${today}T23:59:59Z`)
       .order('ticket_number', { ascending: false })
       .limit(1);
 
@@ -58,19 +54,15 @@ export const queueService = {
       return 1;
     }
 
-    return (data?.[0]?.ticket_number || 0) + 1;
+    return (data?.[0]?.ticket_number ?? 0) + 1;
   },
 
-  async updateQueueStatus(queueItemId: string, status: QueueStatus) {
-    const updateData: any = { status };
+  async updateQueueStatus(queueItemId: string, status: QueueStatus): Promise<QueueItem> {
+    const updateData: Record<string, unknown> = { status };
 
-    if (status === 'calling') {
-      updateData.called_at = new Date().toISOString();
-    } else if (status === 'active') {
-      updateData.started_at = new Date().toISOString();
-    } else if (status === 'done') {
-      updateData.completed_at = new Date().toISOString();
-    }
+    if (status === 'calling') updateData.called_at    = new Date().toISOString();
+    if (status === 'active')  updateData.started_at   = new Date().toISOString();
+    if (status === 'done')    updateData.completed_at = new Date().toISOString();
 
     const { data, error } = await supabase
       .from('queue_items')
@@ -80,10 +72,10 @@ export const queueService = {
       .single();
 
     if (error) throw error;
-    return data;
+    return data as QueueItem;
   },
 
-  async getQueueByDoctor(doctorId: string, clinicId: string) {
+  async getQueueByDoctor(doctorId: string, clinicId: string): Promise<QueueItem[]> {
     const { data, error } = await supabase
       .from('queue_items')
       .select('*')
@@ -93,34 +85,42 @@ export const queueService = {
       .order('created_at', { ascending: true });
 
     if (error) throw error;
-    return data as QueueItem[];
+    return (data ?? []) as QueueItem[];
   },
 
   async searchPatient(
     clinicId: string,
     doctorId: string,
     searchQuery: string
-  ) {
+  ): Promise<QueueItem | null> {
+    const ticketNum = parseInt(searchQuery, 10);
+    const isNumber = !isNaN(ticketNum);
+
+    // Try exact ticket number match first, then name search
     const { data, error } = await supabase
       .from('queue_items')
       .select('*')
       .eq('clinic_id', clinicId)
       .eq('doctor_id', doctorId)
-      .or(`patient_name.ilike.%${searchQuery}%,ticket_number.eq.${searchQuery}`)
-      .single();
+      .or(
+        isNumber
+          ? `ticket_number.eq.${ticketNum},patient_name.ilike.%${searchQuery}%`
+          : `patient_name.ilike.%${searchQuery}%`
+      )
+      .not('status', 'eq', 'done')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
     if (error) {
       console.error('Patient search error:', error);
       return null;
     }
 
-    return data as QueueItem;
+    return data as QueueItem | null;
   },
 
-  async getPatientPosition(
-    doctorId: string,
-    queueItemId: string
-  ): Promise<number> {
+  async getPatientPosition(doctorId: string, queueItemId: string): Promise<number> {
     const { data, error } = await supabase
       .from('queue_items')
       .select('id')
@@ -130,11 +130,11 @@ export const queueService = {
 
     if (error) throw error;
 
-    const position = data?.findIndex((item) => item.id === queueItemId) || -1;
-    return position + 1;
+    const idx = (data ?? []).findIndex((item) => item.id === queueItemId);
+    return idx === -1 ? 0 : idx + 1;
   },
 
-  async removePatientFromQueue(queueItemId: string) {
+  async removePatientFromQueue(queueItemId: string): Promise<void> {
     const { error } = await supabase
       .from('queue_items')
       .delete()

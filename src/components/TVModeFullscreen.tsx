@@ -34,10 +34,12 @@ export const TVModeFullscreen: React.FC<TVModeFullscreenProps> = ({
       if (document.documentElement.requestFullscreen) {
         await document.documentElement.requestFullscreen();
         setIsFullscreen(true);
-        // Lock orientation on mobile
-        if (screen.orientation?.lock) {
-          await screen.orientation.lock('landscape');
-        }
+        // Lock orientation on mobile (API not yet in all TS libs — use any cast)
+        const orientation = screen.orientation as ScreenOrientation & {
+          lock?: (o: string) => Promise<void>;
+          unlock?: () => void;
+        };
+        await orientation.lock?.('landscape');
       }
     } catch (err) {
       console.error('Fullscreen error:', err);
@@ -49,9 +51,10 @@ export const TVModeFullscreen: React.FC<TVModeFullscreenProps> = ({
       if (document.fullscreenElement) {
         await document.exitFullscreen();
         setIsFullscreen(false);
-        if (screen.orientation?.unlock) {
-          screen.orientation.unlock();
-        }
+        const orientation = screen.orientation as ScreenOrientation & {
+          unlock?: () => void;
+        };
+        orientation.unlock?.();
       }
     } catch (err) {
       console.error('Exit fullscreen error:', err);
@@ -90,14 +93,14 @@ export const TVModeFullscreen: React.FC<TVModeFullscreenProps> = ({
       clinicId,
       doctorId,
       (payload) => {
+        const newRow = payload.new as unknown as QueueItem;
+        const oldRow = payload.old as unknown as Partial<QueueItem>;
         if (payload.eventType === 'INSERT') {
-          setQueueItems((prev) => [...prev, payload.new]);
+          setQueueItems((prev) => [...prev, newRow]);
         } else if (payload.eventType === 'UPDATE') {
-          setQueueItems((prev) =>
-            prev.map((item) => (item.id === payload.new.id ? payload.new : item))
-          );
+          setQueueItems((prev) => prev.map((item) => (item.id === newRow.id ? newRow : item)));
         } else if (payload.eventType === 'DELETE') {
-          setQueueItems((prev) => prev.filter((item) => item.id !== payload.old.id));
+          setQueueItems((prev) => prev.filter((item) => item.id !== oldRow.id));
         }
       }
     );

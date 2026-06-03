@@ -43,14 +43,14 @@ export const TVMode: React.FC<TVModeProps> = ({
       clinicId,
       doctorId,
       (payload) => {
+        const newRow = payload.new as unknown as QueueItem;
+        const oldRow = payload.old as unknown as Partial<QueueItem>;
         if (payload.eventType === 'INSERT') {
-          setQueueItems((prev) => [...prev, payload.new]);
+          setQueueItems((prev) => [...prev, newRow]);
         } else if (payload.eventType === 'UPDATE') {
-          setQueueItems((prev) =>
-            prev.map((item) => (item.id === payload.new.id ? payload.new : item))
-          );
+          setQueueItems((prev) => prev.map((item) => (item.id === newRow.id ? newRow : item)));
         } else if (payload.eventType === 'DELETE') {
-          setQueueItems((prev) => prev.filter((item) => item.id !== payload.old.id));
+          setQueueItems((prev) => prev.filter((item) => item.id !== oldRow.id));
         }
       }
     );
@@ -280,21 +280,11 @@ export const TVMode: React.FC<TVModeProps> = ({
       </div>
 
       {/* Custom Scrollbar CSS */}
-      <style jsx>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: rgba(255, 255, 255, 0.05);
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.2);
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.3);
-        }
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
       `}</style>
     </div>
   );

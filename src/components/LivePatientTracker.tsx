@@ -1,240 +1,221 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { QueueItem } from '@/types';
 import { queueService } from '@/services/queueService';
 import { realtimeService } from '@/lib/realtimeService';
-import { debounce } from '@/lib/debounce';
 
 interface LivePatientTrackerProps {
   clinicId: string;
   doctorId: string;
 }
 
-export const LivePatientTracker: React.FC<LivePatientTrackerProps> = ({
-  clinicId,
-  doctorId,
-}) => {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [patientData, setPatientData] = useState<QueueItem | null>(null);
-  const [loading, setLoading] = useState(false);
+const DEBOUNCE_MS = 450;
+
+/**
+ * Mobile-first patient self-service tracker.
+ * Uses a debounced search so every keystroke doesn't fire a DB query.
+ * Subscribes to Realtime for live updates scoped to this doctor only.
+ */
+export function LivePatientTracker({ clinicId, doctorId }: LivePatientTrackerProps) {
+  const [query, setQuery] = useState('');
+  const [patient, setPatient] = useState<QueueItem | null>(null);
   const [patientsAhead, setPatientsAhead] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const debouncedSearch = useMemo(
-    () =>
-      debounce(async (query: string) => {
-        if (!query.trim()) {
-          setPatientData(null);
+  // Debounced search
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (!query.trim()) {
+      setPatient(null);
+      setPatientsAhead(0);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const result = await queueService.searchPatient(clinicId, doctorId, query);
+        setPatient(result);
+        if (result) {
+          const pos = await queueService.getPatientPosition(doctorId, result.id);
+          setPatientsAhead(Math.max(0, pos - 1));
+        } else {
           setPatientsAhead(0);
-          return;
         }
-
-        setLoading(true);
-        try {
-          const patient = await queueService.searchPatient(clinicId, doctorId, query);
-          if (patient) {
-            setPatientData(patient);
-            const position = await queueService.getPatientPosition(doctorId, patient.id);
-            setPatientsAhead(Math.max(0, position - 1));
-          } else {
-            setPatientData(null);
-            setPatientsAhead(0);
-          }
-        } catch (err) {
-          console.error('Search error:', err);
-          setPatientData(null);
-        } finally {
-          setLoading(false);
-        }
-      }, 500),
-    [clinicId, doctorId]
-  );
-
-  useEffect(() => {
-    debouncedSearch(searchQuery);
-  }, [searchQuery, debouncedSearch]);
-
-  useEffect(() => {
-    if (!patientData) return;
-
-    const subscription = realtimeService.subscribeToQueueUpdates(
-      clinicId,
-      doctorId,
-      (payload) => {
-        if (payload.new?.id === patientData.id) {
-          setPatientData(payload.new);
-        }
-
-        if (
-          payload.eventType === 'DELETE' ||
-          (payload.new?.status === 'done' &&
-            payload.old?.status !== 'done')
-        ) {
-          setPatientsAhead((prev) => Math.max(0, prev - 1));
-        }
+      } finally {
+        setLoading(false);
       }
-    );
+    }, DEBOUNCE_MS);
 
     return () => {
-      subscription.unsubscribe();
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [patientData, clinicId, doctorId]);
+  }, [query, clinicId, doctorId]);
 
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
-  };
+  // Live updates: only subscribed when we have a patient result
+  useEffect(() => {
+    if (!patient) return;
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'waiting':
-        return 'bg-gradient-to-br from-primary-50 to-primary-100';
-      case 'calling':
-        return 'bg-gradient-to-br from-accent-50 to-accent-100';
-      case 'active':
-        return 'bg-gradient-to-br from-purple-50 to-purple-100';
-      case 'done':
-        return 'bg-gradient-to-br from-green-50 to-green-100';
-      default:
-        return 'bg-neutral-50';
-    }
-  };
+    const sub = realtimeService.subscribeToQueueUpdates(clinicId, doctorId, (payload) => {
+      const updated = payload.new as unknown as QueueItem | undefined;
+      const deleted = payload.old as unknown as Partial<QueueItem> | undefined;
 
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'waiting':
-        return '⏳ في الانتظار';
-      case 'calling':
-        return '📢 قيد الاستدعاء';
-      case 'active':
-        return '👨‍⚕️ قيد الاستشارة';
-      case 'done':
-        return '✅ انتهى';
-      default:
-        return status;
-    }
-  };
+      // Update this patient's own card
+      if (payload.eventType === 'UPDATE' && updated?.id === patient.id) {
+        setPatient(updated);
+      }
+
+      // Recalculate position when any row ahead moves to done/calling->active
+      if (
+        payload.eventType === 'UPDATE' &&
+        updated &&
+        updated.id !== patient.id &&
+        (updated.status === 'done' || updated.status === 'active')
+      ) {
+        setPatientsAhead((prev) => Math.max(0, prev - 1));
+      }
+
+      if (payload.eventType === 'DELETE' && deleted?.id !== patient.id) {
+        setPatientsAhead((prev) => Math.max(0, prev - 1));
+      }
+    });
+
+    return () => sub.unsubscribe();
+  }, [patient, clinicId, doctorId]);
+
+  const statusContent = patient ? resolveStatusContent(patient, patientsAhead) : null;
 
   return (
-    <div className="min-h-screen bg-gradient-novro rtl p-6 md:p-8" dir="rtl">
-      <div className="max-w-md mx-auto">
-        {/* Header */}
-        <div className="mb-10 text-center text-white">
-          <h1 className="text-4xl font-display font-bold mb-2">تتبع دورك</h1>
-          <p className="text-primary-100 text-lg">ابحث عن رقم دورك أو اسمك</p>
+    <div className="min-h-screen bg-gradient-novro flex flex-col items-center px-4 py-10 rtl" dir="rtl">
+      {/* Header */}
+      <div className="w-full max-w-sm text-center text-white mb-8">
+        <h1 className="text-3xl font-display font-bold mb-1">تتبع دورك</h1>
+        <p className="text-primary-100 text-sm">ابحث بالاسم أو رقم الدور</p>
+      </div>
+
+      {/* Search */}
+      <div className="w-full max-w-sm mb-6">
+        <div className="relative">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ابحث هنا..."
+            className="w-full pl-4 pr-12 py-4 text-base rounded-2xl shadow-lg border-0 focus:outline-none focus:ring-4 focus:ring-white/30 text-right"
+          />
+          <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-400" />
         </div>
-
-        {/* Search Input */}
-        <div className="mb-8">
-          <div className="relative">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={handleSearchChange}
-              placeholder="ابحث برقم دورك أو اسمك..."
-              className="w-full px-6 py-4 text-lg border-0 rounded-2xl shadow-lg focus:outline-none focus:ring-4 focus:ring-accent-300 transition text-right font-medium placeholder:text-neutral-400"
-            />
-            <div className="absolute left-4 top-1/2 transform -translate-y-1/2 text-xl">🔍</div>
-          </div>
-          {loading && (
-            <p className="text-center mt-3 text-primary-100 font-medium flex items-center justify-center gap-2">
-              <div className="inline-block animate-spin h-4 w-4 border-2 border-primary-100 border-t-white rounded-full"></div>
-              جاري البحث...
-            </p>
-          )}
-        </div>
-
-        {/* Patient Card */}
-        {patientData && (
-          <div className={`${getStatusColor(patientData.status)} rounded-3xl p-8 shadow-2xl mb-6 transform transition duration-300 animate-slide-up border-2 border-white/20`}>
-            {/* Ticket Number - Large Display */}
-            <div className="text-center mb-8">
-              <div className="inline-block bg-white rounded-3xl p-6 shadow-lg">
-                <p className="text-xs font-semibold text-neutral-600 mb-2 uppercase tracking-wider">رقم دورك</p>
-                <p className="text-6xl font-display font-bold bg-gradient-to-r from-primary-600 to-accent-500 bg-clip-text text-transparent">
-                  {String(patientData.ticket_number).padStart(3, '0')}
-                </p>
-              </div>
-            </div>
-
-            {/* Patient Info */}
-            <div className="space-y-5 mb-8">
-              {/* Name */}
-              <div>
-                <p className="text-xs font-semibold opacity-75 mb-1 uppercase tracking-wide">اسم المريض</p>
-                <p className="text-2xl font-bold text-neutral-900">{patientData.patient_name}</p>
-              </div>
-
-              {/* Status */}
-              <div>
-                <p className="text-xs font-semibold opacity-75 mb-2 uppercase tracking-wide">الحالة</p>
-                <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 rounded-full font-semibold">
-                  <span className="text-lg">
-                    {patientData.status === 'waiting'
-                      ? '⏳'
-                      : patientData.status === 'calling'
-                      ? '📢'
-                      : patientData.status === 'active'
-                      ? '👨‍⚕️'
-                      : '✅'}
-                  </span>
-                  <span className="text-neutral-900">{getStatusLabel(patientData.status)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Status-Specific Content */}
-            {patientData.status === 'waiting' && (
-              <div className="bg-white/80 rounded-2xl p-6 text-center">
-                <p className="text-xs font-semibold text-neutral-600 mb-2 uppercase tracking-wide">المرضى أمامك</p>
-                <p className="text-5xl font-display font-bold text-primary-600 mb-3">{patientsAhead}</p>
-                <p className="text-sm font-medium text-neutral-700">
-                  الوقت المتوقع: <span className="font-bold text-primary-600">~{patientsAhead * 15} دقيقة</span>
-                </p>
-              </div>
-            )}
-
-            {patientData.status === 'calling' && (
-              <div className="bg-white/90 rounded-2xl p-6 text-center animate-pulse">
-                <p className="text-4xl mb-3">🔔</p>
-                <p className="text-2xl font-bold text-accent-600">يرجى التوجه إلى عيادة الطبيب الآن!</p>
-              </div>
-            )}
-
-            {patientData.status === 'active' && (
-              <div className="bg-white/80 rounded-2xl p-6 text-center">
-                <p className="text-4xl mb-3">👋</p>
-                <p className="text-xl font-bold text-neutral-900">الطبيب جاهز لك الآن</p>
-              </div>
-            )}
-
-            {patientData.status === 'done' && (
-              <div className="bg-white/80 rounded-2xl p-6 text-center">
-                <p className="text-5xl mb-3">✅</p>
-                <p className="text-xl font-bold text-green-600">شكراً لك!</p>
-                <p className="text-sm text-neutral-600 mt-2">تم إنهاء الاستشارة بنجاح</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* No Results */}
-        {searchQuery && !patientData && !loading && (
-          <div className="bg-white rounded-2xl p-8 text-center shadow-lg animate-slide-up">
-            <p className="text-3xl mb-3">🔍</p>
-            <p className="text-lg font-semibold text-neutral-700 mb-1">لم يتم العثور على نتيجة</p>
-            <p className="text-sm text-neutral-500">تحقق من رقم دورك أو اسمك</p>
-          </div>
-        )}
-
-        {/* Empty State */}
-        {!searchQuery && !patientData && (
-          <div className="bg-white rounded-2xl p-8 text-center shadow-lg">
-            <p className="text-5xl mb-4">🔎</p>
-            <p className="text-lg font-semibold text-neutral-700 mb-2">ابدأ البحث الآن</p>
-            <p className="text-sm text-neutral-500">أدخل رقم دورك أو اسمك بالأعلى</p>
-          </div>
+        {loading && (
+          <p className="text-center mt-2 text-white/70 text-sm flex items-center justify-center gap-2">
+            <span className="h-3 w-3 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+            جاري البحث...
+          </p>
         )}
       </div>
+
+      {/* Patient card */}
+      {patient && statusContent && (
+        <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl overflow-hidden animation-slide-up">
+          {/* Ticket number bar */}
+          <div className="bg-clinic-primary text-white text-center py-6">
+            <p className="text-xs font-semibold uppercase tracking-widest opacity-80 mb-1">رقم دورك</p>
+            <p className="text-7xl font-display font-black leading-none">
+              {String(patient.ticket_number).padStart(3, '0')}
+            </p>
+          </div>
+
+          <div className="p-6 space-y-4">
+            <div>
+              <p className="text-xs text-neutral-400 font-medium uppercase tracking-wider mb-0.5">الاسم</p>
+              <p className="text-xl font-bold text-neutral-900">{patient.patient_name}</p>
+            </div>
+
+            <StatusBadge status={patient.status} />
+
+            {statusContent}
+          </div>
+        </div>
+      )}
+
+      {/* No results */}
+      {query && !patient && !loading && (
+        <div className="w-full max-w-sm bg-white rounded-3xl p-8 text-center shadow-lg animation-slide-up">
+          <p className="text-lg font-semibold text-neutral-700 mb-1">لم يتم العثور على نتيجة</p>
+          <p className="text-sm text-neutral-400">تحقق من الاسم أو رقم الدور</p>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!query && (
+        <div className="w-full max-w-sm bg-white/10 backdrop-blur-sm rounded-3xl p-8 text-center">
+          <p className="text-white/60 text-sm">أدخل اسمك أو رقم دورك أعلاه</p>
+        </div>
+      )}
     </div>
   );
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function resolveStatusContent(patient: QueueItem, patientsAhead: number): React.ReactNode {
+  switch (patient.status) {
+    case 'waiting':
+      return (
+        <div className="bg-primary-50 rounded-2xl p-4 text-center">
+          <p className="text-xs text-primary-500 font-semibold uppercase tracking-wider mb-1">
+            المرضى أمامك
+          </p>
+          <p className="text-5xl font-display font-bold text-primary-600">{patientsAhead}</p>
+          <p className="text-xs text-neutral-500 mt-1">
+            وقت تقريبي: ~{patientsAhead * 15} دقيقة
+          </p>
+        </div>
+      );
+    case 'calling':
+      return (
+        <div className="bg-orange-50 rounded-2xl p-4 text-center animate-pulse">
+          <p className="text-lg font-bold text-orange-700">يرجى التوجه إلى عيادة الطبيب الآن</p>
+        </div>
+      );
+    case 'active':
+      return (
+        <div className="bg-teal-50 rounded-2xl p-4 text-center">
+          <p className="text-lg font-bold text-teal-700">الطبيب جاهز لك</p>
+        </div>
+      );
+    case 'done':
+      return (
+        <div className="bg-green-50 rounded-2xl p-4 text-center">
+          <p className="text-lg font-bold text-green-700">شكراً — تمت الاستشارة بنجاح</p>
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+const statusLabelMap: Record<string, { label: string; cls: string }> = {
+  waiting: { label: 'في الانتظار',   cls: 'bg-primary-100 text-primary-700' },
+  calling: { label: 'قيد الاستدعاء', cls: 'bg-orange-100 text-orange-700 animate-pulse' },
+  active:  { label: 'قيد الاستشارة', cls: 'bg-teal-100 text-teal-700' },
+  done:    { label: 'انتهى',         cls: 'bg-green-100 text-green-700' },
 };
+
+function StatusBadge({ status }: { status: string }) {
+  const meta = statusLabelMap[status] ?? { label: status, cls: 'bg-neutral-100 text-neutral-600' };
+  return (
+    <span className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${meta.cls}`}>
+      {meta.label}
+    </span>
+  );
+}
+
+const SearchIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <circle cx="11" cy="11" r="8" />
+    <path strokeLinecap="round" d="M21 21l-4.35-4.35" />
+  </svg>
+);
